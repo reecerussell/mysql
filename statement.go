@@ -45,12 +45,13 @@ func (stmt *mysqlStmt) ColumnConverter(idx int) driver.ValueConverter {
 }
 
 func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
-	if stmt.mc.closed.IsSet() {
-		errLog.Print(ErrInvalidConn)
-		return nil, driver.ErrBadConn
+	err := stmt.mc.EnsureConnected()
+	if err != nil {
+		return nil, err
 	}
+
 	// Send command
-	err := stmt.writeExecutePacket(args)
+	err = stmt.writeExecutePacket(args)
 	if err != nil {
 		return nil, stmt.mc.markBadConn(err)
 	}
@@ -93,12 +94,13 @@ func (stmt *mysqlStmt) Query(args []driver.Value) (driver.Rows, error) {
 }
 
 func (stmt *mysqlStmt) query(args []driver.Value) (*binaryRows, error) {
-	if stmt.mc.closed.IsSet() {
-		errLog.Print(ErrInvalidConn)
-		return nil, driver.ErrBadConn
+	err := stmt.mc.EnsureConnected()
+	if err != nil {
+		return nil, err
 	}
+
 	// Send command
-	err := stmt.writeExecutePacket(args)
+	err = stmt.writeExecutePacket(args)
 	if err != nil {
 		return nil, stmt.mc.markBadConn(err)
 	}

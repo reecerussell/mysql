@@ -148,12 +148,13 @@ func (mc *mysqlConn) error() error {
 }
 
 func (mc *mysqlConn) Prepare(query string) (driver.Stmt, error) {
-	if mc.closed.IsSet() {
-		errLog.Print(ErrInvalidConn)
-		return nil, driver.ErrBadConn
+	err := mc.EnsureConnected()
+	if err != nil {
+		return nil, err
 	}
+
 	// Send command
-	err := mc.writeCommandPacketStr(comStmtPrepare, query)
+	err = mc.writeCommandPacketStr(comStmtPrepare, query)
 	if err != nil {
 		// STMT_PREPARE is safe to retry.  So we can return ErrBadConn here.
 		errLog.Print(err)
@@ -315,10 +316,11 @@ func (mc *mysqlConn) interpolateParams(query string, args []driver.Value) (strin
 }
 
 func (mc *mysqlConn) Exec(query string, args []driver.Value) (driver.Result, error) {
-	if mc.closed.IsSet() {
-		errLog.Print(ErrInvalidConn)
-		return nil, driver.ErrBadConn
+	err := mc.EnsureConnected()
+	if err != nil {
+		return nil, err
 	}
+
 	if len(args) != 0 {
 		if !mc.cfg.InterpolateParams {
 			return nil, driver.ErrSkip
@@ -333,7 +335,7 @@ func (mc *mysqlConn) Exec(query string, args []driver.Value) (driver.Result, err
 	mc.affectedRows = 0
 	mc.insertId = 0
 
-	err := mc.exec(query)
+	err = mc.exec(query)
 	if err == nil {
 		return &mysqlResult{
 			affectedRows: int64(mc.affectedRows),
@@ -376,10 +378,11 @@ func (mc *mysqlConn) Query(query string, args []driver.Value) (driver.Rows, erro
 }
 
 func (mc *mysqlConn) query(query string, args []driver.Value) (*textRows, error) {
-	if mc.closed.IsSet() {
-		errLog.Print(ErrInvalidConn)
-		return nil, driver.ErrBadConn
+	err := mc.EnsureConnected()
+	if err != nil {
+		return nil, err
 	}
+
 	if len(args) != 0 {
 		if !mc.cfg.InterpolateParams {
 			return nil, driver.ErrSkip
@@ -392,7 +395,7 @@ func (mc *mysqlConn) query(query string, args []driver.Value) (*textRows, error)
 		query = prepared
 	}
 	// Send command
-	err := mc.writeCommandPacketStr(comQuery, query)
+	err = mc.writeCommandPacketStr(comQuery, query)
 	if err == nil {
 		// Read Result
 		var resLen int
@@ -470,9 +473,9 @@ func (mc *mysqlConn) finish() {
 
 // Ping implements driver.Pinger interface
 func (mc *mysqlConn) Ping(ctx context.Context) (err error) {
-	if mc.closed.IsSet() {
-		errLog.Print(ErrInvalidConn)
-		return driver.ErrBadConn
+	err = mc.EnsureConnected()
+	if err != nil {
+		return
 	}
 
 	if err = mc.watchCancel(ctx); err != nil {
@@ -652,9 +655,31 @@ func (mc *mysqlConn) CheckNamedValue(nv *driver.NamedValue) (err error) {
 // ResetSession implements driver.SessionResetter.
 // (From Go 1.10)
 func (mc *mysqlConn) ResetSession(ctx context.Context) error {
-	if mc.closed.IsSet() {
-		return driver.ErrBadConn
+	err := mc.EnsureConnected()
+	if err != nil {
+		return err
 	}
+
 	mc.reset = true
+	return nil
+}
+
+// EnsureConnected ensures the connection is open by checking the the connection
+// status and reopening it, if needed.
+//
+// A non-nil error is returned if the attempt to reopen the connection fails.
+func (mc *mysqlConn) EnsureConnected() error {
+	if mc.closed.IsSet() {
+		c := &connector{cfg: mc.cfg}
+		conn, err := c.Connect(context.Background())
+		if err != nil {
+			errLog.Print(ErrInvalidConn)
+			return driver.ErrBadConn
+		}
+
+		nc := conn.(*mysqlConn)
+		*mc = *nc
+	}
+
 	return nil
 }
